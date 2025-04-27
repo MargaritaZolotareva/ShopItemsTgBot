@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  shop-api:
+    build: .
+    container_name: shop-api
+    volumes:
+      - .:/go/src/app
+    working_dir: /go/src/app
+    ports:
+      - "8080:8080"
+#      - "2345:2345"
+#    command: "dlv debug ./cmd/server --headless --listen=:2345 --api-version=2 --accept-multiclient"
+    command: ["go", "run", "cmd/server/main.go"]
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - shop_api_net
+  postgres:
+    image: postgres:13
+    container_name: shop-db
+    environment:
+      POSTGRES_USER: apiuser
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: apidb
+    volumes:
+      - ./migrations/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - shop_api_net
+  redis:
+    image: redis:alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - shop_api_net
+
+networks:
+  shop_api_net:
+    driver: bridge
+
+volumes:
+  db_data:
