@@ -1,10 +1,13 @@
 package model
 
 type Product struct {
-	ID          int     `json:"id"`
-	Title       string  `json:"title"`
-	Price       float64 `json:"price"`
-	Description string  `json:"description"`
+	ID           int     `json:"id"`
+	Title        string  `json:"title"`
+	Price        float64 `json:"price"`
+	Description  string  `json:"description"`
+	Photos       []Photo `json:"photos"`
+	Category     string  `json:"category"`
+	LargestPhoto string
 }
 type PhotoSize struct {
 	URL  string `json:"url"`
@@ -49,8 +52,12 @@ type Item struct {
 	} `json:"price"`
 	Description  string        `json:"description"`
 	VariantsGrid []VariantGrid `json:"variants_grid"`
+	Photos       []Photo       `json:"photos"`
+	OwnerInfo    OwnerInfo     `json:"owner_info"`
 }
-
+type OwnerInfo struct {
+	Category string `json:"category"`
+}
 type Balloon struct {
 	ID             int     `db:"id"`
 	Name           string  `db:"name"`

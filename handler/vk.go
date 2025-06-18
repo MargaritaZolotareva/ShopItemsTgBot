@@ -11,7 +11,18 @@ import (
 	"strings"
 )
 
-func GenerateXLSXHandler() (string, []byte) {
+func GenerateXLSX() (string, []byte) {
+	allProducts := GetAllProductsFromVk()
+
+	fileName, fileBytes, err := service.WriteProductsToExcel(allProducts)
+	if err != nil {
+		log.Fatalf("Ошибка формирования Excel-файла: %v", err)
+	}
+
+	return fileName, fileBytes
+}
+
+func GetAllProductsFromVk() []model.Product {
 	accessToken := os.Getenv("VK_ACCESS_TOKEN")
 	groupID := os.Getenv("VK_GROUP_ID")
 	albumIDs := strings.Split(os.Getenv("VK_ALBUM_IDS"), ",")
@@ -26,12 +37,7 @@ func GenerateXLSXHandler() (string, []byte) {
 		allProducts = append(allProducts, products...)
 	}
 
-	fileName, fileBytes, err := service.WriteProductsToExcel(allProducts)
-	if err != nil {
-		log.Fatalf("Ошибка формирования Excel-файла: %v", err)
-	}
-
-	return fileName, fileBytes
+	return allProducts
 }
 
 func GetProductsFromVK(accessToken, groupID string, albumID string) ([]model.Product, error) {
@@ -63,7 +69,10 @@ func GetProductsFromVK(accessToken, groupID string, albumID string) ([]model.Pro
 				Title:       item.Title,
 				Price:       variant.Price,
 				Description: item.Description,
+				Photos:      item.Photos,
+				Category:    item.OwnerInfo.Category,
 			}
+			product.LargestPhoto = GetLargestPhoto(product)
 			products = append(products, product)
 		}
 	}
@@ -107,4 +116,25 @@ func GetVariants(item model.Item, basePrice float64) []model.Variant {
 		result = append(result, variantsData)
 	}
 	return result
+}
+
+func GetLargestPhoto(product model.Product) string {
+	if len(product.Photos) == 0 {
+		return ""
+	}
+
+	// Порядок приоритетных типов: оригинал -> большое изображение -> среднее -> маленькое
+	photoTypes := []string{"z", "x", "m", "s"}
+
+	for _, photoType := range photoTypes {
+		for _, photo := range product.Photos {
+			for _, size := range photo.Sizes {
+				if size.Type == photoType {
+					return size.URL
+				}
+			}
+		}
+	}
+
+	return ""
 }
