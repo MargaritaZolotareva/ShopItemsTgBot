@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -25,6 +26,9 @@ func StartBotWebhook(db *gorm.DB, bot *tgbotapi.BotAPI, redisClient *redis.Clien
 			log.Println("Ошибка при декодировании webhook:", err)
 			return
 		}
+		if !isAccessAllowed(updates) {
+			return
+		}
 
 		if updates.CallbackQuery != nil {
 			handleCallback(bot, updates, redisClient)
@@ -35,6 +39,47 @@ func StartBotWebhook(db *gorm.DB, bot *tgbotapi.BotAPI, redisClient *redis.Clien
 
 		w.WriteHeader(http.StatusOK)
 	}
+}
+
+func getAllowedUsers() map[int]bool {
+	usersEnv := os.Getenv("ALLOWED_USERS")
+	users := strings.Split(usersEnv, ",")
+	allowedUsers := make(map[int]bool)
+	for _, user := range users {
+		if userId, err := strconv.Atoi(user); err == nil {
+			allowedUsers[userId] = true
+		}
+	}
+
+	return allowedUsers
+}
+
+func getUserFromId(updates tgbotapi.Update) (int, bool) {
+	if updates.CallbackQuery != nil && updates.CallbackQuery.From != nil {
+		return updates.CallbackQuery.From.ID, true
+	}
+
+	if updates.Message != nil && updates.Message.From != nil {
+		return updates.Message.From.ID, true
+	}
+
+	return 0, false
+}
+
+func isAccessAllowed(updates tgbotapi.Update) bool {
+	allowedUsers := getAllowedUsers()
+
+	userFromId, found := getUserFromId(updates)
+	if !found {
+		log.Println("Пользователь не найден.")
+		return false
+	}
+
+	if _, ok := allowedUsers[userFromId]; !ok {
+		log.Println("Доступ для пользователя с ID ", userFromId, " запрещён")
+		return false
+	}
+	return true
 }
 
 func handleCallback(bot *tgbotapi.BotAPI, update tgbotapi.Update, redisClient *redis.Client) {
