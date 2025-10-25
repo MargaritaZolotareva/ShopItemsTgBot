@@ -1,8 +1,8 @@
 package main
 
 import (
-	"VkScraper/bot"
-	"VkScraper/router"
+	"ShopItemsTgBot/bot"
+	"ShopItemsTgBot/internal/router"
 	"context"
 	"fmt"
 	"github.com/go-redis/redis/v8"
@@ -17,18 +17,20 @@ import (
 var ctx = context.Background()
 
 func init() {
-	err := godotenv.Load()
-	if err != nil {
-		log.Fatalf("Error loading .env file")
+	if os.Getenv("GO_ENV") == "development" {
+		err := godotenv.Load("/build/.env")
+		if err != nil {
+			log.Fatalf("Error loading .env file: %v", err)
+		}
 	}
 }
 
 func InitDB() *gorm.DB {
 	dsn := fmt.Sprintf(
 		"user=%s password=%s dbname=%s host=%s port=%s sslmode=disable",
-		os.Getenv("DB_USER"),
-		os.Getenv("DB_PASSWORD"),
-		os.Getenv("DB_NAME"),
+		os.Getenv("POSTGRES_USER"),
+		os.Getenv("POSTGRES_PASSWORD"),
+		os.Getenv("POSTGRES_DB"),
 		os.Getenv("DB_HOST"),
 		os.Getenv("DB_PORT"),
 	)

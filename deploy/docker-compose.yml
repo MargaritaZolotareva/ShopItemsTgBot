@@ -2,16 +2,20 @@ version: '3.8'
 
 services:
   shop-api:
-    build: .
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
     container_name: shop-api
     volumes:
-      - .:/go/src/app
-    working_dir: /go/src/app
+      - .:/app
+    working_dir: /app
+    env_file:
+      - ../.env
     ports:
       - "8080:8080"
 #      - "2345:2345"
 #    command: "dlv debug ./cmd/server --headless --listen=:2345 --api-version=2 --accept-multiclient"
-    command: ["go", "run", "cmd/server/main.go"]
+    command: ["/build/ShopItemsTgBot"] #["go", "run", "cmd/server/main.go"]
     depends_on:
       - postgres
       - redis
@@ -20,12 +24,10 @@ services:
   postgres:
     image: postgres:13
     container_name: shop-db
-    environment:
-      POSTGRES_USER: apiuser
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: apidb
+    env_file:
+      - ../.env
     volumes:
-      - ./migrations/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ../scripts/migrations/init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
       - "5432:5432"
     networks:

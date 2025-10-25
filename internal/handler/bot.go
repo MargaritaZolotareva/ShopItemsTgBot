@@ -1,8 +1,8 @@
 package handler
 
 import (
-	"VkScraper/internal/file_formatter"
-	"VkScraper/service"
+	"ShopItemsTgBot/internal/file_formatter"
+	"ShopItemsTgBot/internal/service"
 	"context"
 	"encoding/json"
 	"fmt"

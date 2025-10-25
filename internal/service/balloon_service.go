@@ -1,7 +1,7 @@
 package service
 
 import (
-	"VkScraper/model"
+	"ShopItemsTgBot/internal/model"
 	"gorm.io/gorm"
 	"math"
 )

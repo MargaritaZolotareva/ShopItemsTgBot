@@ -1,7 +1,7 @@
 package service
 
 import (
-	"VkScraper/model"
+	"ShopItemsTgBot/internal/model"
 	"bytes"
 	"fmt"
 	"github.com/xuri/excelize/v2"

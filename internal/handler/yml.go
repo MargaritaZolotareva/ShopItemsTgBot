@@ -1,7 +1,7 @@
 package handler
 
 import (
-	"VkScraper/model"
+	"ShopItemsTgBot/internal/model"
 	"fmt"
 	"strings"
 )

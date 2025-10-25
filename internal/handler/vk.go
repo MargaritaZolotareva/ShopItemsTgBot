@@ -1,8 +1,8 @@
 package handler
 
 import (
-	"VkScraper/model"
-	"VkScraper/service"
+	"ShopItemsTgBot/internal/model"
+	"ShopItemsTgBot/internal/service"
 	"encoding/json"
 	"fmt"
 	"log"

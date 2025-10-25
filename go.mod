@@ -1,4 +1,4 @@
-module VkScraper
+module ShopItemsTgBot
 
 go 1.22.5
 

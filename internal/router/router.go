@@ -1,7 +1,7 @@
 package router
 
 import (
-	"VkScraper/handler"
+	"ShopItemsTgBot/internal/handler"
 	"github.com/go-redis/redis/v8"
 	"github.com/go-telegram-bot-api/telegram-bot-api"
 	"gorm.io/gorm"
