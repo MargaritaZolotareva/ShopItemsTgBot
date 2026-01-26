@@ -2,7 +2,6 @@ package main
 
 import (
 	"ShopItemsTgBot/bot"
-	"ShopItemsTgBot/internal/router"
 	"context"
 	"fmt"
 	"github.com/go-redis/redis/v8"
@@ -10,8 +9,10 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"log"
-	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 )
 
 var ctx = context.Background()
@@ -62,12 +63,24 @@ func initRedis() *redis.Client {
 func main() {
 	log.SetOutput(os.Stdout)
 	db := InitDB()
-	tgBot := bot.StartBot()
 	redisInst := initRedis()
-	router.SetupRoutes(db, tgBot, redisInst)
 
-	log.Println("Сервер запущен на порту 8080")
-	if err := http.ListenAndServe(":8080", nil); err != nil {
-		log.Fatal(err)
+	bot.StartBot(redisInst, db)
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	<-stop
+
+	log.Println("Graceful shutdown started")
+	_, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	log.Println("Closing redis")
+	redisInst.Close()
+
+	log.Println("Closing DB connection...")
+	if sqlDB, err := db.DB(); err == nil {
+		sqlDB.Close()
 	}
+
+	log.Println("Shutdown complete")
 }

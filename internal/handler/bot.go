@@ -3,11 +3,13 @@ package handler
 import (
 	"ShopItemsTgBot/internal/file_formatter"
 	"ShopItemsTgBot/internal/service"
+	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/PaulSonOfLars/gotgbot/v2"
+	"github.com/PaulSonOfLars/gotgbot/v2/ext"
 	"github.com/go-redis/redis/v8"
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 	"gorm.io/gorm"
 	"log"
 	"net/http"
@@ -17,28 +19,24 @@ import (
 	"time"
 )
 
-var ctx = context.Background()
-
-func StartBotWebhook(db *gorm.DB, bot *tgbotapi.BotAPI, redisClient *redis.Client) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var updates tgbotapi.Update
-		if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
-			log.Println("Ошибка при декодировании webhook:", err)
-			return
-		}
-		if !isAccessAllowed(updates) {
-			return
-		}
-
-		if updates.CallbackQuery != nil {
-			handleCallback(bot, updates, redisClient)
-		}
-		if updates.Message != nil {
-			handleMessage(bot, updates, db, redisClient)
-		}
-
-		w.WriteHeader(http.StatusOK)
+func StartBotWebhook(w http.ResponseWriter, r *http.Request) {
+	token := r.Header.Get("X-Telegram-Bot-Api-Secret-Token")
+	if token != os.Getenv("TG_BOT_WEBHOOK_SECRET") {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		log.Println("Invalid secret token")
+		return
 	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func CheckUserMiddleware(b *gotgbot.Bot, ctx *ext.Context) error {
+	if !isAccessAllowed(ctx) {
+		b.SendMessage(ctx.EffectiveMessage.Chat.Id, "Вы не авторизованы для использования этого бота.", nil)
+		return fmt.Errorf("access denied for user %d", ctx.EffectiveSender.User.Id)
+	}
+
+	return nil
 }
 
 func getAllowedUsers() map[int]bool {
@@ -54,27 +52,10 @@ func getAllowedUsers() map[int]bool {
 	return allowedUsers
 }
 
-func getUserFromId(updates tgbotapi.Update) (int, bool) {
-	if updates.CallbackQuery != nil && updates.CallbackQuery.From != nil {
-		return updates.CallbackQuery.From.ID, true
-	}
-
-	if updates.Message != nil && updates.Message.From != nil {
-		return updates.Message.From.ID, true
-	}
-
-	return 0, false
-}
-
-func isAccessAllowed(updates tgbotapi.Update) bool {
+func isAccessAllowed(ctx *ext.Context) bool {
 	allowedUsers := getAllowedUsers()
 
-	userFromId, found := getUserFromId(updates)
-	if !found {
-		log.Println("Пользователь не найден.")
-		return false
-	}
-
+	userFromId := int(ctx.EffectiveSender.User.Id)
 	if _, ok := allowedUsers[userFromId]; !ok {
 		log.Println("Доступ для пользователя с ID ", userFromId, " запрещён")
 		return false
@@ -82,76 +63,44 @@ func isAccessAllowed(updates tgbotapi.Update) bool {
 	return true
 }
 
-func handleCallback(bot *tgbotapi.BotAPI, update tgbotapi.Update, redisClient *redis.Client) {
-	state, err := redisClient.Get(ctx, fmt.Sprintf("state:%d", update.CallbackQuery.Message.Chat.ID)).Result()
-	if err != nil && err != redis.Nil {
-		log.Println("Ошибка при получении состояния из Redis:", err)
-		return
-	}
-
-	switch state {
-	case "awaiting_xlsx_file_platform":
-		handleFilePlatform(bot, update, redisClient)
-	default:
-		if update.CallbackQuery.Data == "download_file" {
-			msg := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, "Введите платформу для загрузки товаров:")
-			replyKeyboard := tgbotapi.NewInlineKeyboardMarkup(
-				tgbotapi.NewInlineKeyboardRow(
-					tgbotapi.NewInlineKeyboardButtonData("Яндекс", "yandex"),
-					tgbotapi.NewInlineKeyboardButtonData("2ГИС", "2gis"),
-				),
-			)
-
-			msg.ReplyMarkup = replyKeyboard
-
-			bot.Send(msg)
-			redisClient.Set(ctx, fmt.Sprintf("state:%d", update.CallbackQuery.Message.Chat.ID), "awaiting_xlsx_file_platform", 0).Err()
-		}
-		if update.CallbackQuery.Data == "update_prices" {
-			msg := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, "Введите стоимость порции гелия (в рублях):")
-			bot.Send(msg)
-			redisClient.Set(ctx, fmt.Sprintf("state:%d", update.CallbackQuery.Message.Chat.ID), "awaiting_helium_price", 0).Err()
-		}
-	}
+func (h *CustomHandler) SendRequestPriceMessage(b *gotgbot.Bot, ctx *ext.Context) error {
+	rCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ctx.EffectiveMessage.Reply(b, "Введите стоимость порции гелия (в рублях):", nil)
+	h.RedisClient.Set(rCtx, fmt.Sprintf("state:%d", ctx.EffectiveMessage.Chat.Id), "awaiting_helium_price", 0).Err()
+	return nil
 }
 
-func handleMessage(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.DB, redisClient *redis.Client) {
-	state, err := redisClient.Get(ctx, fmt.Sprintf("state:%d", update.Message.Chat.ID)).Result()
-	if err != nil && err != redis.Nil {
-		log.Println("Ошибка при получении состояния из Redis:", err)
-		return
+func (h *CustomHandler) ShowFileTypes(b *gotgbot.Bot, ctx *ext.Context) error {
+	if err := CheckUserMiddleware(b, ctx); err != nil {
+		return nil
 	}
-
-	switch state {
-	case "awaiting_helium_price":
-		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Обновление цен запущено")
-		bot.Send(msg)
-		go handleHeliumPriceInput(bot, update, db, redisClient)
-	default:
-		if update.Message.Command() == "start" {
-			msg := createStartMenu(update.Message.Chat.ID)
-			bot.Send(msg)
-		}
-	}
+	rCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	ctx.EffectiveMessage.Reply(b, "Введите платформу для загрузки товаров:", &gotgbot.SendMessageOpts{
+		ParseMode: "html",
+		ReplyMarkup: &gotgbot.ReplyKeyboardMarkup{
+			Keyboard: [][]gotgbot.KeyboardButton{
+				{
+					{Text: "yandex"},
+					{Text: "2gis"},
+				},
+			},
+			ResizeKeyboard:  true,
+			OneTimeKeyboard: true,
+		},
+	})
+	h.RedisClient.Set(rCtx, fmt.Sprintf("state:%d", ctx.EffectiveMessage.Chat.Id), "awaiting_xlsx_file_platform", 0).Err()
+	return nil
 }
 
-func createStartMenu(chatId int64) tgbotapi.MessageConfig {
-	msg := tgbotapi.NewMessage(chatId, "Выберите действие:")
-	replyKeyboard := tgbotapi.NewInlineKeyboardMarkup(
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Обновить цены товаров", "update_prices"),
-			tgbotapi.NewInlineKeyboardButtonData("Скачать файл товаров для сторонней платформы", "download_file"),
-		),
-	)
-	msg.ReplyMarkup = replyKeyboard
-	return msg
-}
-
-func handleHeliumPriceInput(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *gorm.DB, redisClient *redis.Client) {
-	heliumPrice, err := strconv.Atoi(update.Message.Text)
+func HandleHeliumPriceInput(b *gotgbot.Bot, ctx *ext.Context, redisClient *redis.Client, db *gorm.DB) {
+	heliumPrice, err := strconv.Atoi(ctx.EffectiveMessage.Text)
 	if err != nil {
-		msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Ошибка ввода. Пожалуйста, введите число.")
-		bot.Send(msg)
+		_, err := ctx.EffectiveMessage.Reply(b, "Ошибка ввода. Пожалуйста, введите число.", nil)
+		if err != nil {
+			log.Println("failed to send message: %w", err)
+		}
 		return
 	}
 
@@ -181,16 +130,38 @@ func handleHeliumPriceInput(bot *tgbotapi.BotAPI, update tgbotapi.Update, db *go
 		}
 	}
 
-	msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Цены успешно обновлены!")
-	bot.Send(msg)
-	redisClient.Del(ctx, fmt.Sprintf("state:%d", update.Message.Chat.ID))
+	_, err = ctx.EffectiveMessage.Reply(b, "Цены успешно обновлены!", nil)
+	if err != nil {
+		log.Println("failed to send message: %w", err)
+	}
 
-	msg = createStartMenu(update.Message.Chat.ID)
-	bot.Send(msg)
+	rCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	redisClient.Del(rCtx, fmt.Sprintf("state:%d", ctx.EffectiveMessage.Chat.Id))
+
+	CreateStartMenu(b, ctx)
 }
 
-func handleFilePlatform(bot *tgbotapi.BotAPI, update tgbotapi.Update, redisClient *redis.Client) {
-	format := update.CallbackQuery.Data
+func isValidCallbackData(data string) bool {
+	return data == "yandex" || data == "2gis"
+}
+
+func (h *CustomHandler) HandleFilePlatform(b *gotgbot.Bot, ctx *ext.Context) error {
+	format := ctx.EffectiveMessage.Text
+
+	if !isValidCallbackData(format) {
+		log.Printf("Invalid callback data: %s", format)
+		_, err := b.SendMessage(
+			ctx.EffectiveMessage.Chat.Id,
+			"Неправильный формат файла. Пожалуйста, выберите вариант из меню.",
+			nil,
+		)
+		if err != nil {
+			log.Println("Error sending message:", err)
+		}
+		return nil
+	}
+
 	formatter, err := file_formatter.NewFileFormatter(format)
 	if err != nil {
 		log.Println(err, format)
@@ -198,13 +169,84 @@ func handleFilePlatform(bot *tgbotapi.BotAPI, update tgbotapi.Update, redisClien
 	products := GetAllProductsFromVk()
 
 	fileName, fileBytes, err := formatter.Generate(products)
-	doc := tgbotapi.NewDocumentUpload(update.CallbackQuery.Message.Chat.ID, tgbotapi.FileBytes{
-		Name:  fileName,
-		Bytes: fileBytes,
-	})
-	bot.Send(doc)
-	redisClient.Del(ctx, fmt.Sprintf("state:%d", update.CallbackQuery.Message.Chat.ID))
+	buf := bytes.NewBuffer(fileBytes)
 
-	msg := createStartMenu(update.CallbackQuery.Message.Chat.ID)
-	bot.Send(msg)
+	_, err = b.SendDocument(ctx.EffectiveChat.Id,
+		gotgbot.InputFileByReader(fileName, buf),
+		&gotgbot.SendDocumentOpts{
+			ReplyParameters: &gotgbot.ReplyParameters{
+				MessageId: ctx.EffectiveMessage.MessageId,
+			},
+		})
+	if err != nil {
+		log.Println("failed to send document: %w", err)
+		return nil
+	}
+
+	rCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	h.RedisClient.Del(rCtx, fmt.Sprintf("state:%d", ctx.EffectiveMessage.Chat.Id))
+
+	CreateStartMenu(b, ctx)
+
+	return nil
+}
+
+func CreateStartMenu(b *gotgbot.Bot, ctx *ext.Context) error {
+	if err := CheckUserMiddleware(b, ctx); err != nil {
+		return nil
+	}
+	_, err := b.SendMessage(ctx.EffectiveMessage.Chat.Id, "Выберите действие:", &gotgbot.SendMessageOpts{
+		ParseMode: "html",
+		ReplyMarkup: &gotgbot.ReplyKeyboardMarkup{
+			Keyboard: [][]gotgbot.KeyboardButton{{
+				{Text: "Обновить цены товаров"},
+				{Text: "Скачать файл товаров для загрузки"},
+			}},
+			ResizeKeyboard:  true,
+			OneTimeKeyboard: true,
+		},
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to send start message: %w", err)
+	}
+	return nil
+}
+
+type CustomHandler struct {
+	RedisClient *redis.Client
+	DB          *gorm.DB
+}
+
+func (h *CustomHandler) HandleMessage(b *gotgbot.Bot, ctx *ext.Context) error {
+	if err := CheckUserMiddleware(b, ctx); err != nil {
+		return nil
+	}
+	rCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	state, err := h.RedisClient.Get(rCtx, fmt.Sprintf("state:%d", ctx.EffectiveMessage.Chat.Id)).Result()
+	if err != nil && !errors.Is(err, redis.Nil) {
+		log.Println("Ошибка при получении состояния из Redis:", err)
+		return nil
+	}
+
+	switch state {
+	case "awaiting_helium_price":
+		_, err := ctx.EffectiveMessage.Reply(b, "Обновление цен запущено", nil)
+		if err != nil {
+			log.Println("failed to send message: %w", err)
+		}
+		go HandleHeliumPriceInput(b, ctx, h.RedisClient, h.DB)
+	case "awaiting_xlsx_file_platform":
+		h.HandleFilePlatform(b, ctx)
+	default:
+		if ctx.EffectiveMessage.Text == "Скачать файл товаров для загрузки" {
+			h.ShowFileTypes(b, ctx)
+		}
+		if ctx.EffectiveMessage.Text == "Обновить цены товаров" {
+			h.SendRequestPriceMessage(b, ctx)
+		}
+	}
+	return nil
 }
